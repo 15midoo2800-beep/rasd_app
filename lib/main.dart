@@ -1,9 +1,9 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:vosk_flutter/vosk_flutter.dart';
 import 'package:excel/excel.dart' as ex;
 import 'package:share_plus/share_plus.dart';
-import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'plate_parser.dart';
 import 'database_helper.dart';
@@ -21,7 +21,7 @@ class LicensePlateScannerScreen extends StatefulWidget {
 }
 
 class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
-  final VoskFlutterPlugin _vosk = VoskFlutterPlugin();
+  final VoskFlutterPlugin _vosk = VoskFlutterPlugin.instance();
   Model? _model;
   Recognizer? _recognizer;
   SpeechService? _speechService;
@@ -34,7 +34,7 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
   String selectedStreet = "ض 1";
   String selectedNote = "بدون ملاحظة";
 
-  List> records = [];
+  List<dynamic> records = [];
 
   @override
   void initState() {
@@ -45,43 +45,46 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
 
   Future<void> _loadRecords() async {
     final logs = await DatabaseHelper.instance.getLogs();
-    setState(() => records = List.from(logs));
+    setState(() {
+      records = List<dynamic>.from(logs);
+    });
   }
 
   Future<void> _initVosk() async {
-    final modelPath = await ModelLoader().loadFromAssets('assets/models/vosk-model-ar');
-    _model = await _vosk.createModel(modelPath);
+    try {
+      final modelPath = await ModelLoader().loadFromAssets('assets/models/vosk-model-ar');
+      _model = await _vosk.createModel(modelPath);
 
-    final grammarJson = jsonEncode(PlateParser.getGrammarWords());
-    _recognizer = await _vosk.createRecognizer(
-      model: _model!,
-      sampleRate: 16000,
-      grammar: grammarJson,
-    );
+      _recognizer = await _vosk.createRecognizer(
+        model: _model!,
+        sampleRate: 16000,
+        grammar: PlateParser.getGrammarWords(),
+      );
 
-    _speechService = await _vosk.initSpeechService(_recognizer!);
-    
-    // التقاط الكلمات اللحظية أثناء تدفق الصوت
-    _speechService!.onPartial().listen((event) {
-      final data = jsonDecode(event);
-      final partial = data["partial"] ?? "";
-      setState(() => _liveSpokenText = partial);
+      _speechService = await _vosk.initSpeechService(_recognizer!);
 
-      final parsed = PlateParser.parseStream(partial);
-      if (parsed != null && parsed["isComplete"]) {
-        _handleDetectedPlate(parsed);
-      }
-    });
+      _speechService!.onPartial().listen((event) {
+        final data = jsonDecode(event);
+        final partial = data["partial"] ?? "";
+        setState(() => _liveSpokenText = partial);
 
-    // التقاط النتيجة النهائية
-    _speechService!.onResult().listen((event) {
-      final data = jsonDecode(event);
-      final text = data["text"] ?? "";
-      final parsed = PlateParser.parseStream(text);
-      if (parsed != null && parsed["isComplete"]) {
-        _handleDetectedPlate(parsed);
-      }
-    });
+        final parsed = PlateParser.parseStream(partial);
+        if (parsed != null && parsed["isComplete"] == true) {
+          _handleDetectedPlate(parsed);
+        }
+      });
+
+      _speechService!.onResult().listen((event) {
+        final data = jsonDecode(event);
+        final text = data["text"] ?? "";
+        final parsed = PlateParser.parseStream(text);
+        if (parsed != null && parsed["isComplete"] == true) {
+          _handleDetectedPlate(parsed);
+        }
+      });
+    } catch (e) {
+      setState(() => _currentStatusText = "خطأ في تهيئة الصوت: $e");
+    }
   }
 
   void _handleDetectedPlate(Map<String, dynamic> parsedData) async {
@@ -109,7 +112,7 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
       _liveSpokenText = "";
     });
 
-    _recognizer?.reset();
+    await _recognizer?.reset();
   }
 
   void _toggleListening() async {
@@ -144,18 +147,21 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
 
     for (var r in records) {
       sheet.appendRow([
-        ex.TextCellValue(r['plate']),
+        ex.TextCellValue(r['plate'].toString()),
         ex.TextCellValue(r['status'] == 1 ? 'مطلوبة' : 'سليمة'),
-        ex.TextCellValue(r['type'] ?? '-'),
-        ex.TextCellValue(r['street'] ?? '-'),
-        ex.TextCellValue(r['note'] ?? '-'),
+        ex.TextCellValue((r['type'] ?? '-').toString()),
+        ex.TextCellValue((r['street'] ?? '-').toString()),
+        ex.TextCellValue((r['note'] ?? '-').toString()),
       ]);
     }
 
     final dir = await getApplicationDocumentsDirectory();
-    final file = File('${dir.path}/رصد_السيارات_${DateTime.now().millisecondsSinceEpoch}.xlsx');
-    await file.writeAsBytes(excel.encode()!);
-    await Share.shareXFiles([XFile(file.path)], text: 'تقرير رصد السيارات المطلوبة');
+    final file = File('${dir.path}/rasd_${DateTime.now().millisecondsSinceEpoch}.xlsx');
+    final bytes = excel.encode();
+    if (bytes != null) {
+      await file.writeAsBytes(bytes);
+      await Share.shareXFiles([XFile(file.path)], text: 'تقرير رصد السيارات المطلوبة');
+    }
   }
 
   @override
@@ -178,19 +184,28 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
                     onPressed: _toggleListening,
                   ),
                   const Spacer(),
-                  const Text("SHEEKHA", style: TextStyle(color: Colors.tealAccent, fontSize: 20, fontWeight: FontWeight.bold)),
+                  const Text(
+                    "SHEEKHA",
+                    style: TextStyle(color: Colors.tealAccent, fontSize: 20, fontWeight: FontWeight.bold),
+                  ),
                 ],
               ),
             ),
             Container(
               margin: const EdgeInsets.symmetric(horizontal: 16),
               padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: const Color(0xFF1E293B), borderRadius: BorderRadius.circular(12)),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E293B),
+                borderRadius: BorderRadius.circular(12),
+              ),
               child: Column(
                 children: [
                   Text(_currentStatusText, style: const TextStyle(color: Colors.white70)),
                   if (_liveSpokenText.isNotEmpty)
-                    Text(_liveSpokenText, style: const TextStyle(color: Colors.greenAccent, fontSize: 18, fontWeight: FontWeight.bold)),
+                    Text(
+                      _liveSpokenText,
+                      style: const TextStyle(color: Colors.greenAccent, fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
                 ],
               ),
             ),
@@ -261,7 +276,13 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
                     color: index % 2 == 0 ? Colors.transparent : Colors.black12,
                     child: Row(
                       children: [
-                        Expanded(flex: 3, child: Text(row["plate"], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
+                        Expanded(
+                          flex: 3,
+                          child: Text(
+                            row["plate"].toString(),
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                          ),
+                        ),
                         Expanded(
                           flex: 1,
                           child: Icon(
@@ -270,9 +291,9 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
                             size: 20,
                           ),
                         ),
-                        Expanded(flex: 2, child: Text(row["type"] ?? "-", style: const TextStyle(color: Colors.white70))),
-                        Expanded(flex: 2, child: Text(row["street"] ?? "-", style: const TextStyle(color: Colors.white70))),
-                        Expanded(flex: 2, child: Text(row["note"] ?? "-", style: const TextStyle(color: Colors.white70))),
+                        Expanded(flex: 2, child: Text((row["type"] ?? "-").toString(), style: const TextStyle(color: Colors.white70))),
+                        Expanded(flex: 2, child: Text((row["street"] ?? "-").toString(), style: const TextStyle(color: Colors.white70))),
+                        Expanded(flex: 2, child: Text((row["note"] ?? "-").toString(), style: const TextStyle(color: Colors.white70))),
                         IconButton(
                           icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
                           onPressed: () async {
@@ -299,15 +320,19 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
         return SimpleDialog(
           title: const Text("اختر ملاحظة", textAlign: TextAlign.right),
           children: [
-            "بدون ملاحظة", "برحة يمين", "برحة يسار", "برحة نهاية الشارع",
-            "برحة وسط الشارع", "برحة فندق"
+            "بدون ملاحظة",
+            "برحة يمين",
+            "برحة يسار",
+            "برحة نهاية الشارع",
+            "برحة وسط الشارع",
+            "برحة فندق"
           ].map((note) => SimpleDialogOption(
-            onPressed: () {
-              setState(() => selectedNote = note);
-              Navigator.pop(context);
-            },
-            child: Text(note, textAlign: TextAlign.right),
-          )).toList(),
+                onPressed: () {
+                  setState(() => selectedNote = note);
+                  Navigator.pop(context);
+                },
+                child: Text(note, textAlign: TextAlign.right),
+              )).toList(),
         );
       },
     );
