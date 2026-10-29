@@ -1,0 +1,26 @@
+name: rasd_app
+description: Vehicle plate field scanner
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  vosk_flutter: ^0.3.1
+  sqflite: ^2.3.0
+  path: ^1.8.3
+  excel: ^4.0.2
+  share_plus: ^7.2.1
+  path_provider: ^2.1.1
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/models/vosk-model-ar/
+    - assets/models/vosk-model-ar/am/
+    - assets/models/vosk-model-ar/conf/
+    - assets/models/vosk-model-ar/graph/
+    - assets/models/vosk-model-ar/ivector/
