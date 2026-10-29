@@ -27,7 +27,7 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
   SpeechService? _speechService;
 
   bool _isListening = false;
-  String _currentStatusText = "اختر الحي والشارع أولاً، ثم ابدأ التسجيل وقل اللوحة وبعدها النوع";
+  String _currentStatusText = "جاري تهيئة الصوت...";
   String _liveSpokenText = "";
 
   String selectedDistrict = "النهضة";
@@ -52,7 +52,8 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
 
   Future<void> _initVosk() async {
     try {
-      final modelPath = await ModelLoader().loadFromAssets('assets/models/vosk-model-ar');
+      // تحميل الموديل كملف مضغوط zip
+      final modelPath = await ModelLoader().loadFromAssets('assets/models/vosk-model-ar.zip');
       _model = await _vosk.createModel(modelPath);
 
       _recognizer = await _vosk.createRecognizer(
@@ -62,6 +63,10 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
       );
 
       _speechService = await _vosk.initSpeechService(_recognizer!);
+
+      setState(() {
+        _currentStatusText = "اختر الحي والشارع أولاً، ثم ابدأ التسجيل وقل اللوحة وبعدها النوع";
+      });
 
       _speechService!.onPartial().listen((event) {
         final data = jsonDecode(event);
