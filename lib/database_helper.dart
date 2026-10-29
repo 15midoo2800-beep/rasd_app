@@ -1,6 +1,9 @@
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 
+typedef LogRecord = Map<String, dynamic>;
+typedef LogList = List<dynamic>;
+
 class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._init();
   static Database? _database;
@@ -21,7 +24,6 @@ class DatabaseHelper {
       path,
       version: 1,
       onCreate: (db, version) async {
-        // جدول السيارات المطلوبة
         await db.execute('''
           CREATE TABLE wanted (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,10 +31,8 @@ class DatabaseHelper {
           )
         ''');
 
-        // فهرس فوري للبحث في أجزاء من الثانية
         await db.execute('CREATE INDEX idx_wanted_plate ON wanted(plate_number)');
 
-        // جدول سجلات الرصد الميداني
         await db.execute('''
           CREATE TABLE logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,7 +49,6 @@ class DatabaseHelper {
     );
   }
 
-  // فحص اللوحة هل هي مطلوبة أم لا
   Future<bool> checkIsWanted(String plate) async {
     final db = await instance.database;
     String cleanPlate = plate.replaceAll(' ', '');
@@ -60,19 +59,16 @@ class DatabaseHelper {
     return maps.isNotEmpty;
   }
 
-  // إدراج سجل رصد جديد
-  Future<int> insertLog(Map<String, dynamic> row) async {
+  Future<int> insertLog(LogRecord row) async {
     final db = await instance.database;
     return await db.insert('logs', row);
   }
 
-  // جلب كافة سجلات الرصد
-  Future<List>> getLogs() async {
+  Future<LogList> getLogs() async {
     final db = await instance.database;
     return await db.query('logs', orderBy: 'id DESC');
   }
 
-  // حذف سجل
   Future<int> deleteLog(int id) async {
     final db = await instance.database;
     return await db.delete('logs', where: 'id = ?', whereArgs: [id]);
