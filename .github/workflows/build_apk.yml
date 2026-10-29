@@ -1,0 +1,49 @@
+name: Build Flutter APK
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java JDK
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.x'
+          channel: 'stable'
+          cache: true
+
+      - name: Download Vosk Arabic Model
+        run: |
+          wget https://alphacephei.com/vosk/models/vosk-model-small-ar-mgb2-0.4.zip
+          unzip vosk-model-small-ar-mgb2-0.4.zip
+          mkdir -p assets/models/vosk-model-ar
+          cp -r vosk-model-small-ar-mgb2-0.4/* assets/models/vosk-model-ar/
+          rm -rf vosk-model-small-ar-mgb2-0.4 vosk-model-small-ar-mgb2-0.4.zip
+
+      - name: Get Dependencies
+        run: flutter pub get
+
+      - name: Build APK (Release)
+        run: flutter build apk --release
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk
+          path: build/app/outputs/flutter-apk/*.apk
