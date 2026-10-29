@@ -34,11 +34,8 @@ jobs:
 
       - name: Fix Kotlin Duplicate Classes and Update minSdkVersion
         run: |
-          # رفع إصدار الأندرويد إلى 21 لتوافق Vosk
           sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/g' android/app/build.gradle
-          
-          # حقن كود حل تعارض مكتبات Kotlin في ملف Gradle
           cat << 'EOF' >> android/app/build.gradle
           
           dependencies {
@@ -53,13 +50,10 @@ jobs:
           }
           EOF
 
-      - name: Download Vosk Arabic Model
+      - name: Download Vosk Arabic Model (AS ZIP)
         run: |
-          wget -q https://alphacephei.com/vosk/models/vosk-model-ar-mgb2-0.4.zip
-          unzip -q vosk-model-ar-mgb2-0.4.zip
-          mkdir -p assets/models/vosk-model-ar
-          cp -r vosk-model-ar-mgb2-0.4/* assets/models/vosk-model-ar/
-          rm -rf vosk-model-ar-mgb2-0.4*
+          mkdir -p assets/models
+          wget -q https://alphacephei.com/vosk/models/vosk-model-ar-mgb2-0.4.zip -O assets/models/vosk-model-ar.zip
 
       - name: Add Permissions to AndroidManifest
         run: |
@@ -68,8 +62,8 @@ jobs:
       - name: Get Dependencies
         run: flutter pub get
 
-      - name: Build APK (Release)
-        run: flutter build apk --release
+      - name: Build APK (Release & Split for small size)
+        run: flutter build apk --release --split-per-abi
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
