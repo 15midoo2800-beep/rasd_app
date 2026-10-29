@@ -32,10 +32,26 @@ jobs:
         run: |
           flutter create --platforms=android --org=com.example .
 
-      - name: Update minSdkVersion to 21
+      - name: Fix Kotlin Duplicate Classes and Update minSdkVersion
         run: |
+          # رفع إصدار الأندرويد إلى 21 لتوافق Vosk
           sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/g' android/app/build.gradle
+          
+          # حقن كود حل تعارض مكتبات Kotlin في ملف Gradle
+          cat << 'EOF' >> android/app/build.gradle
+          
+          dependencies {
+              modules {
+                  module("org.jetbrains.kotlin:kotlin-stdlib-jdk7") {
+                      replacedBy("org.jetbrains.kotlin:kotlin-stdlib", "kotlin-stdlib-jdk7 is now part of kotlin-stdlib")
+                  }
+                  module("org.jetbrains.kotlin:kotlin-stdlib-jdk8") {
+                      replacedBy("org.jetbrains.kotlin:kotlin-stdlib", "kotlin-stdlib-jdk8 is now part of kotlin-stdlib")
+                  }
+              }
+          }
+          EOF
 
       - name: Download Vosk Arabic Model
         run: |
