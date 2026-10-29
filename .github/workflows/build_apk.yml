@@ -30,11 +30,11 @@ jobs:
 
       - name: Download Vosk Arabic Model
         run: |
-          wget https://alphacephei.com/vosk/models/vosk-model-small-ar-mgb2-0.4.zip
-          unzip vosk-model-small-ar-mgb2-0.4.zip
+          wget -q https://alphacephei.com/vosk/models/vosk-model-ar-mgb2-0.4.zip
+          unzip -q vosk-model-ar-mgb2-0.4.zip
           mkdir -p assets/models/vosk-model-ar
-          cp -r vosk-model-small-ar-mgb2-0.4/* assets/models/vosk-model-ar/
-          rm -rf vosk-model-small-ar-mgb2-0.4 vosk-model-small-ar-mgb2-0.4.zip
+          cp -r vosk-model-ar-mgb2-0.4/* assets/models/vosk-model-ar/
+          rm -rf vosk-model-ar-mgb2-0.4*
 
       - name: Get Dependencies
         run: flutter pub get
