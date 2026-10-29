@@ -28,6 +28,10 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: Recreate Android Project Files (Embedding V2)
+        run: |
+          flutter create --platforms=android --org=com.example .
+
       - name: Download Vosk Arabic Model
         run: |
           wget -q https://alphacephei.com/vosk/models/vosk-model-ar-mgb2-0.4.zip
@@ -35,6 +39,10 @@ jobs:
           mkdir -p assets/models/vosk-model-ar
           cp -r vosk-model-ar-mgb2-0.4/* assets/models/vosk-model-ar/
           rm -rf vosk-model-ar-mgb2-0.4*
+
+      - name: Add Permissions to AndroidManifest
+        run: |
+          sed -i '/<application/i \    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />' android/app/src/main/AndroidManifest.xml
 
       - name: Get Dependencies
         run: flutter pub get
