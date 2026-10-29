@@ -32,6 +32,11 @@ jobs:
         run: |
           flutter create --platforms=android --org=com.example .
 
+      - name: Update minSdkVersion to 21
+        run: |
+          sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/g' android/app/build.gradle
+
       - name: Download Vosk Arabic Model
         run: |
           wget -q https://alphacephei.com/vosk/models/vosk-model-ar-mgb2-0.4.zip
