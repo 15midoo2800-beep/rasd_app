@@ -6,8 +6,8 @@ import 'package:excel/excel.dart' as ex;
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:dio/dio.dart';
 import 'package:archive/archive_io.dart';
+import 'package:file_picker/file_picker.dart';
 import 'plate_parser.dart';
 import 'database_helper.dart';
 
@@ -31,7 +31,8 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
 
   bool _isListening = false;
   bool _isReady = false;
-  String _currentStatusText = "جاري التحقق من الملفات...";
+  bool _needsModel = false;
+  String _currentStatusText = "جاري التحقق من الصلاحيات والملفات...";
   String _liveSpokenText = "";
 
   String selectedDistrict = "النهضة";
@@ -52,6 +53,7 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
   }
 
   Future<void> _initSystem() async {
+    // 1. طلب الصلاحيات
     var status = await Permission.microphone.request();
     if (!status.isGranted) {
       setState(() => _currentStatusText = "يجب منح صلاحية الميكروفون ليعمل التطبيق.");
@@ -62,16 +64,70 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
       final dir = await getApplicationDocumentsDirectory();
       final extractPath = '${dir.path}/vosk-model-ar-mgb2-0.4';
 
-      // التطبيق سيكتشف أن الملف موجود ولن يحمله مرة أخرى
+      // 2. فحص وجود الموديل
       if (!await Directory(extractPath).exists()) {
-        await _downloadAndExtractModel(dir.path, extractPath);
+        setState(() {
+          _needsModel = true;
+          _currentStatusText = "القاموس غير موجود. اضغط أدناه لاختيار ملف (vosk-model-ar-mgb2-0.4.zip) من هاتفك.";
+        });
+        return;
+      }
+      
+      // 3. التشغيل في حال كان موجوداً
+      await _startVoskEngine(extractPath);
+    } catch (e) {
+      setState(() => _currentStatusText = "حدث خطأ أثناء الفحص: $e");
+    }
+  }
+
+  Future<void> _pickAndExtractModel() async {
+    FilePickerResult? result = await FilePicker.platform.pickFiles(
+      type: FileType.any,
+    );
+    
+    if (result != null && result.files.single.path != null) {
+      String zipPath = result.files.single.path!;
+      
+      if (!zipPath.toLowerCase().endsWith('.zip')) {
+        setState(() => _currentStatusText = "عذراً، يجب اختيار الملف المضغوط بصيغة ZIP");
+        return;
       }
 
-      setState(() => _currentStatusText = "جاري تشغيل محرك الذكاء الاصطناعي...");
-
-      _model = await _vosk.createModel(extractPath);
+      setState(() {
+        _needsModel = false;
+        _currentStatusText = "جاري التثبيت وفك الضغط بأمان... (قد يستغرق من دقيقة لـ 3 دقائق، لا تغلق التطبيق إطلاقاً)";
+      });
       
-      // هنا تم حذف سطر القاموس (Grammar) الذي كان يسبب الكراش
+      // تأخير بسيط لإعطاء الواجهة فرصة للتحديث قبل العملية الثقيلة
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      try {
+        final dir = await getApplicationDocumentsDirectory();
+        
+        // طريقة فك ضغط آمنة جداً لا تستهلك الرامات
+        final inputStream = InputFileStream(zipPath);
+        final archive = ZipDecoder().decodeBuffer(inputStream);
+        extractArchiveToDisk(archive, dir.path);
+        inputStream.close();
+
+        final extractPath = '${dir.path}/vosk-model-ar-mgb2-0.4';
+        await _startVoskEngine(extractPath);
+      } catch (e) {
+        setState(() {
+          _needsModel = true;
+          _currentStatusText = "حدث خطأ أثناء فك الضغط. تأكد من أن الملف سليم ومساحته في الهاتف كافية: $e";
+        });
+      }
+    }
+  }
+
+  Future<void> _startVoskEngine(String path) async {
+    setState(() => _currentStatusText = "جاري تشغيل محرك الذكاء الاصطناعي...");
+    
+    try {
+      _model = await _vosk.createModel(path);
+      
+      // تم إزالة القاموس (grammar) من هنا لمنع الكراش الإجباري
       _recognizer = await _vosk.createRecognizer(
         model: _model!,
         sampleRate: 16000,
@@ -81,12 +137,13 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
 
       setState(() {
         _isReady = true;
-        _currentStatusText = "جاهز تماماً! اضغط على المايك لبدء الرصد";
+        _currentStatusText = "جاهز تماماً! اضغط على المايك وابدأ الرصد";
       });
 
       _speechService!.onPartial().listen((event) {
         final data = jsonDecode(event);
         final partial = data["partial"] ?? "";
+        // عرض النص الحي
         setState(() => _liveSpokenText = partial);
 
         final parsed = PlateParser.parseStream(partial);
@@ -104,37 +161,7 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
         }
       });
     } catch (e) {
-      setState(() => _currentStatusText = "حدث خطأ: $e");
-    }
-  }
-
-  Future<void> _downloadAndExtractModel(String dirPath, String extractPath) async {
-    final zipPath = '$dirPath/model.zip';
-    final dio = Dio();
-
-    try {
-      await dio.download(
-        'https://alphacephei.com/vosk/models/vosk-model-ar-mgb2-0.4.zip',
-        zipPath,
-        onReceiveProgress: (rec, total) {
-          if (total != -1) {
-            final progress = ((rec / total) * 100).toStringAsFixed(0);
-            setState(() => _currentStatusText = "تحميل القاموس الصوتي (لمرة واحدة): $progress%");
-          }
-        },
-      );
-
-      setState(() => _currentStatusText = "جاري التثبيت... (لا تغلق التطبيق)");
-      await Future.delayed(const Duration(milliseconds: 500));
-
-      final inputStream = InputFileStream(zipPath);
-      final archive = ZipDecoder().decodeBuffer(inputStream);
-      extractArchiveToDisk(archive, dirPath);
-      inputStream.close();
-
-      await File(zipPath).delete();
-    } catch (e) {
-      setState(() => _currentStatusText = "خطأ في التحميل: $e");
+      setState(() => _currentStatusText = "خطأ في تشغيل المحرك: $e");
     }
   }
 
@@ -154,6 +181,7 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
       records.insert(0, newRow);
       _liveSpokenText = "";
     });
+    // تصفير المحرك بعد التقاط اللوحة
     await _recognizer?.reset();
   }
 
@@ -181,7 +209,7 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
     final bytes = excel.encode();
     if (bytes != null) {
       await file.writeAsBytes(bytes);
-      await Share.shareXFiles([XFile(file.path)], text: 'تقرير الرصد');
+      await Share.shareXFiles([XFile(file.path)], text: 'تقرير الرصد الميداني');
     }
   }
 
@@ -212,8 +240,27 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
               child: Column(
                 children: [
                   Text(_currentStatusText, style: const TextStyle(color: Colors.white70), textAlign: TextAlign.center),
+                  
+                  // زر اختيار القاموس يظهر فقط إذا لم يتم العثور عليه
+                  if (_needsModel)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 16),
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.teal,
+                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                        ),
+                        onPressed: _pickAndExtractModel,
+                        icon: const Icon(Icons.folder_zip, size: 24),
+                        label: const Text("اختيار ملف القاموس من الهاتف", style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+
                   if (_liveSpokenText.isNotEmpty)
-                    Text(_liveSpokenText, style: const TextStyle(color: Colors.greenAccent, fontSize: 18, fontWeight: FontWeight.bold)),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: Text(_liveSpokenText, style: const TextStyle(color: Colors.greenAccent, fontSize: 18, fontWeight: FontWeight.bold)),
+                    ),
                 ],
               ),
             ),
