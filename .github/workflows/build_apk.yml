@@ -24,12 +24,11 @@ jobs:
         with:
           flutter-version: '3.19.x'
           channel: 'stable'
-          cache: true
 
-      - name: Recreate Android Project Files (Embedding V2)
+      - name: Recreate Android Project Files
         run: flutter create --platforms=android --org=com.example .
 
-      - name: Fix Kotlin Duplicate Classes and Update minSdkVersion
+      - name: Fix Kotlin and Update SDK
         run: |
           sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/g' android/app/build.gradle
@@ -42,23 +41,18 @@ jobs:
           }
           EOF
 
-      - name: Download Vosk Arabic Model (AS ZIP)
+      - name: Add Permissions
         run: |
-          mkdir -p assets/models
-          wget -q https://alphacephei.com/vosk/models/vosk-model-ar-mgb2-0.4.zip -O assets/models/vosk-model-ar.zip
-
-      - name: Add Permissions to AndroidManifest
-        run: |
-          sed -i '/<application/i \    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />' android/app/src/main/AndroidManifest.xml
+          sed -i '/<application/i \    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />' android/app/src/main/AndroidManifest.xml
 
       - name: Get Dependencies
         run: flutter pub get
 
-      - name: Build APK (ONLY for Modern Phones like Oppo A92)
+      - name: Build APK (ONLY for Modern Phones)
         run: flutter build apk --release --target-platform android-arm64
 
-      - name: Upload APK Artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: release-apk-oppo
+          name: release-apk-small
           path: build/app/outputs/flutter-apk/app-release.apk
