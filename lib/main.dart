@@ -6,7 +6,7 @@ import 'package:excel/excel.dart' as ex;
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:archive/archive_io.dart';
+import 'package:flutter_archive/flutter_archive.dart';
 import 'package:file_picker/file_picker.dart';
 import 'plate_parser.dart';
 import 'database_helper.dart';
@@ -18,7 +18,6 @@ void main() => runApp(const MaterialApp(
 
 class LicensePlateScannerScreen extends StatefulWidget {
   const LicensePlateScannerScreen({Key? key}) : super(key: key);
-
   @override
   State<LicensePlateScannerScreen> createState() => _LicensePlateScannerScreenState();
 }
@@ -53,7 +52,6 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
   }
 
   Future<void> _initSystem() async {
-    // 1. طلب الصلاحيات
     var status = await Permission.microphone.request();
     if (!status.isGranted) {
       setState(() => _currentStatusText = "يجب منح صلاحية الميكروفون ليعمل التطبيق.");
@@ -63,17 +61,20 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
     try {
       final dir = await getApplicationDocumentsDirectory();
       final extractPath = '${dir.path}/vosk-model-ar-mgb2-0.4';
+      final coreFile = File('$extractPath/am/final.mdl');
 
-      // 2. فحص وجود الموديل
-      if (!await Directory(extractPath).exists()) {
+      // فحص أمان: هل المجلد موجود وهل اكتمل فك ضغطه؟
+      if (!await coreFile.exists()) {
+        final badDir = Directory(extractPath);
+        if (await badDir.exists()) await badDir.delete(recursive: true); // مسح الملفات المعطوبة
+
         setState(() {
           _needsModel = true;
-          _currentStatusText = "القاموس غير موجود. اضغط أدناه لاختيار ملف (vosk-model-ar-mgb2-0.4.zip) من هاتفك.";
+          _currentStatusText = "القاموس غير موجود. اضغط أدناه لاختيار ملف (vosk-model-ar-mgb2-0.4.zip).";
         });
         return;
       }
       
-      // 3. التشغيل في حال كان موجوداً
       await _startVoskEngine(extractPath);
     } catch (e) {
       setState(() => _currentStatusText = "حدث خطأ أثناء الفحص: $e");
@@ -81,9 +82,7 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
   }
 
   Future<void> _pickAndExtractModel() async {
-    FilePickerResult? result = await FilePicker.platform.pickFiles(
-      type: FileType.any,
-    );
+    FilePickerResult? result = await FilePicker.platform.pickFiles(type: FileType.any);
     
     if (result != null && result.files.single.path != null) {
       String zipPath = result.files.single.path!;
@@ -95,27 +94,27 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
 
       setState(() {
         _needsModel = false;
-        _currentStatusText = "جاري التثبيت وفك الضغط بأمان... (قد يستغرق من دقيقة لـ 3 دقائق، لا تغلق التطبيق إطلاقاً)";
+        _currentStatusText = "جاري التثبيت وفك الضغط بأمان... (قد يستغرق دقيقتين، لا تغلق الشاشة)";
       });
       
-      // تأخير بسيط لإعطاء الواجهة فرصة للتحديث قبل العملية الثقيلة
       await Future.delayed(const Duration(milliseconds: 500));
 
       try {
         final dir = await getApplicationDocumentsDirectory();
-        
-        // طريقة فك ضغط آمنة جداً لا تستهلك الرامات
-        final inputStream = InputFileStream(zipPath);
-        final archive = ZipDecoder().decodeBuffer(inputStream);
-        extractArchiveToDisk(archive, dir.path);
-        inputStream.close();
+        final zipFile = File(zipPath);
+
+        // استخدام المحرك الأصلي للنظام لفك الضغط دون استهلاك الرامات
+        await ZipFile.extractToDirectory(
+          zipFile: zipFile,
+          destinationDir: dir,
+        );
 
         final extractPath = '${dir.path}/vosk-model-ar-mgb2-0.4';
         await _startVoskEngine(extractPath);
       } catch (e) {
         setState(() {
           _needsModel = true;
-          _currentStatusText = "حدث خطأ أثناء فك الضغط. تأكد من أن الملف سليم ومساحته في الهاتف كافية: $e";
+          _currentStatusText = "حدث خطأ أثناء فك الضغط: $e";
         });
       }
     }
@@ -123,16 +122,9 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
 
   Future<void> _startVoskEngine(String path) async {
     setState(() => _currentStatusText = "جاري تشغيل محرك الذكاء الاصطناعي...");
-    
     try {
       _model = await _vosk.createModel(path);
-      
-      // تم إزالة القاموس (grammar) من هنا لمنع الكراش الإجباري
-      _recognizer = await _vosk.createRecognizer(
-        model: _model!,
-        sampleRate: 16000,
-      );
-
+      _recognizer = await _vosk.createRecognizer(model: _model!, sampleRate: 16000);
       _speechService = await _vosk.initSpeechService(_recognizer!);
 
       setState(() {
@@ -143,22 +135,16 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
       _speechService!.onPartial().listen((event) {
         final data = jsonDecode(event);
         final partial = data["partial"] ?? "";
-        // عرض النص الحي
         setState(() => _liveSpokenText = partial);
-
         final parsed = PlateParser.parseStream(partial);
-        if (parsed != null && parsed["isComplete"] == true) {
-          _handleDetectedPlate(parsed);
-        }
+        if (parsed != null && parsed["isComplete"] == true) _handleDetectedPlate(parsed);
       });
 
       _speechService!.onResult().listen((event) {
         final data = jsonDecode(event);
         final text = data["text"] ?? "";
         final parsed = PlateParser.parseStream(text);
-        if (parsed != null && parsed["isComplete"] == true) {
-          _handleDetectedPlate(parsed);
-        }
+        if (parsed != null && parsed["isComplete"] == true) _handleDetectedPlate(parsed);
       });
     } catch (e) {
       setState(() => _currentStatusText = "خطأ في تشغيل المحرك: $e");
@@ -168,8 +154,8 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
   void _handleDetectedPlate(Map<String, dynamic> parsedData) async {
     String plate = parsedData["plate"];
     String type = parsedData["type"];
-
     if (records.isNotEmpty && records.first["plate"] == plate) return;
+    
     bool isWanted = await DatabaseHelper.instance.checkIsWanted(plate);
     Map<String, dynamic> newRow = {
       "plate": plate, "status": isWanted ? 1 : 0, "type": type.isEmpty ? "-" : type,
@@ -177,11 +163,11 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
     };
     int id = await DatabaseHelper.instance.insertLog(newRow);
     newRow["id"] = id;
+    
     setState(() {
       records.insert(0, newRow);
       _liveSpokenText = "";
     });
-    // تصفير المحرك بعد التقاط اللوحة
     await _recognizer?.reset();
   }
 
@@ -209,7 +195,7 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
     final bytes = excel.encode();
     if (bytes != null) {
       await file.writeAsBytes(bytes);
-      await Share.shareXFiles([XFile(file.path)], text: 'تقرير الرصد الميداني');
+      await Share.shareXFiles([XFile(file.path)], text: 'تقرير الرصد המيداني');
     }
   }
 
@@ -240,22 +226,16 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
               child: Column(
                 children: [
                   Text(_currentStatusText, style: const TextStyle(color: Colors.white70), textAlign: TextAlign.center),
-                  
-                  // زر اختيار القاموس يظهر فقط إذا لم يتم العثور عليه
                   if (_needsModel)
                     Padding(
                       padding: const EdgeInsets.only(top: 16),
                       child: ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.teal,
-                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                        ),
+                        style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12)),
                         onPressed: _pickAndExtractModel,
                         icon: const Icon(Icons.folder_zip, size: 24),
                         label: const Text("اختيار ملف القاموس من الهاتف", style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
                       ),
                     ),
-
                   if (_liveSpokenText.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 12),
