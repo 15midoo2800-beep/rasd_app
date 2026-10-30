@@ -31,7 +31,7 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
 
   bool _isListening = false;
   bool _isReady = false;
-  String _currentStatusText = "جاري التحقق من الصلاحيات...";
+  String _currentStatusText = "جاري التحقق من الملفات...";
   String _liveSpokenText = "";
 
   String selectedDistrict = "النهضة";
@@ -62,6 +62,7 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
       final dir = await getApplicationDocumentsDirectory();
       final extractPath = '${dir.path}/vosk-model-ar-mgb2-0.4';
 
+      // التطبيق سيكتشف أن الملف موجود ولن يحمله مرة أخرى
       if (!await Directory(extractPath).exists()) {
         await _downloadAndExtractModel(dir.path, extractPath);
       }
@@ -69,10 +70,11 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
       setState(() => _currentStatusText = "جاري تشغيل محرك الذكاء الاصطناعي...");
 
       _model = await _vosk.createModel(extractPath);
+      
+      // هنا تم حذف سطر القاموس (Grammar) الذي كان يسبب الكراش
       _recognizer = await _vosk.createRecognizer(
         model: _model!,
         sampleRate: 16000,
-        grammar: PlateParser.getGrammarWords(),
       );
 
       _speechService = await _vosk.initSpeechService(_recognizer!);
@@ -122,10 +124,9 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
         },
       );
 
-      setState(() => _currentStatusText = "جاري التثبيت... (قد يتجمد التطبيق لثوانٍ، لا تغلقه)");
-      await Future.delayed(const Duration(milliseconds: 500)); // إعطاء الواجهة وقتاً للتحديث
+      setState(() => _currentStatusText = "جاري التثبيت... (لا تغلق التطبيق)");
+      await Future.delayed(const Duration(milliseconds: 500));
 
-      // فك الضغط الآمن بدون استهلاك الرامات
       final inputStream = InputFileStream(zipPath);
       final archive = ZipDecoder().decodeBuffer(inputStream);
       extractArchiveToDisk(archive, dirPath);
@@ -133,8 +134,7 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
 
       await File(zipPath).delete();
     } catch (e) {
-      setState(() => _currentStatusText = "خطأ في التحميل، تأكد من اتصال الإنترنت: $e");
-      rethrow;
+      setState(() => _currentStatusText = "خطأ في التحميل: $e");
     }
   }
 
