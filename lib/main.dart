@@ -5,6 +5,7 @@ import 'package:vosk_flutter/vosk_flutter.dart';
 import 'package:excel/excel.dart' as ex;
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'plate_parser.dart';
 import 'database_helper.dart';
 
@@ -27,7 +28,7 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
   SpeechService? _speechService;
 
   bool _isListening = false;
-  String _currentStatusText = "جاري تهيئة الصوت...";
+  String _currentStatusText = "جاري طلب الصلاحيات...";
   String _liveSpokenText = "";
 
   String selectedDistrict = "النهضة";
@@ -51,7 +52,17 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
   }
 
   Future<void> _initVosk() async {
+    // 1. طلب صلاحية الميكروفون لحل مشكلة الإغلاق الإجباري
+    var status = await Permission.microphone.request();
+    if (!status.isGranted) {
+      setState(() => _currentStatusText = "يرجى منح صلاحية الميكروفون ليعمل التطبيق.");
+      return;
+    }
+
+    setState(() => _currentStatusText = "جاري تهيئة الصوت (قد يستغرق ثوانٍ)...");
+
     try {
+      // 2. تحميل الموديل المدمج داخل التطبيق
       final modelPath = await ModelLoader().loadFromAssets('assets/models/vosk-model-ar.zip');
       _model = await _vosk.createModel(modelPath);
 
