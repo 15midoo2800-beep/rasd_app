@@ -62,11 +62,11 @@ jobs:
       - name: Get Dependencies
         run: flutter pub get
 
-      - name: Build APK (Release & Split for small size)
-        run: flutter build apk --release --split-per-abi
+      - name: Build APK (ONLY for Modern Phones like Oppo A92)
+        run: flutter build apk --release --target-platform android-arm64
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release-apk
-          path: build/app/outputs/flutter-apk/*.apk
+          name: release-apk-oppo
+          path: build/app/outputs/flutter-apk/app-release.apk
