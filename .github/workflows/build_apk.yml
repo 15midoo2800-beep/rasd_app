@@ -3,8 +3,6 @@ name: Build Flutter APK
 on:
   push:
     branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
@@ -29,23 +27,17 @@ jobs:
           cache: true
 
       - name: Recreate Android Project Files (Embedding V2)
-        run: |
-          flutter create --platforms=android --org=com.example .
+        run: flutter create --platforms=android --org=com.example .
 
       - name: Fix Kotlin Duplicate Classes and Update minSdkVersion
         run: |
           sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/g' android/app/build.gradle
           cat << 'EOF' >> android/app/build.gradle
-          
           dependencies {
               modules {
-                  module("org.jetbrains.kotlin:kotlin-stdlib-jdk7") {
-                      replacedBy("org.jetbrains.kotlin:kotlin-stdlib", "kotlin-stdlib-jdk7 is now part of kotlin-stdlib")
-                  }
-                  module("org.jetbrains.kotlin:kotlin-stdlib-jdk8") {
-                      replacedBy("org.jetbrains.kotlin:kotlin-stdlib", "kotlin-stdlib-jdk8 is now part of kotlin-stdlib")
-                  }
+                  module("org.jetbrains.kotlin:kotlin-stdlib-jdk7") { replacedBy("org.jetbrains.kotlin:kotlin-stdlib") }
+                  module("org.jetbrains.kotlin:kotlin-stdlib-jdk8") { replacedBy("org.jetbrains.kotlin:kotlin-stdlib") }
               }
           }
           EOF
