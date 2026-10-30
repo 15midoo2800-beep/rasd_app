@@ -6,6 +6,8 @@ import 'package:excel/excel.dart' as ex;
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:dio/dio.dart';
+import 'package:archive/archive_io.dart';
 import 'plate_parser.dart';
 import 'database_helper.dart';
 
@@ -28,44 +30,45 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
   SpeechService? _speechService;
 
   bool _isListening = false;
-  String _currentStatusText = "جاري طلب الصلاحيات...";
+  bool _isReady = false;
+  String _currentStatusText = "جاري التحقق من الصلاحيات...";
   String _liveSpokenText = "";
 
   String selectedDistrict = "النهضة";
   String selectedStreet = "ض 1";
   String selectedNote = "بدون ملاحظة";
-
   List<dynamic> records = [];
 
   @override
   void initState() {
     super.initState();
     _loadRecords();
-    _initVosk();
+    _initSystem();
   }
 
   Future<void> _loadRecords() async {
     final logs = await DatabaseHelper.instance.getLogs();
-    setState(() {
-      records = List<dynamic>.from(logs);
-    });
+    setState(() => records = List<dynamic>.from(logs));
   }
 
-  Future<void> _initVosk() async {
-    // 1. طلب صلاحية الميكروفون لحل مشكلة الإغلاق الإجباري
+  Future<void> _initSystem() async {
     var status = await Permission.microphone.request();
     if (!status.isGranted) {
-      setState(() => _currentStatusText = "يرجى منح صلاحية الميكروفون ليعمل التطبيق.");
+      setState(() => _currentStatusText = "يجب منح صلاحية الميكروفون ليعمل التطبيق.");
       return;
     }
 
-    setState(() => _currentStatusText = "جاري تهيئة الصوت (قد يستغرق ثوانٍ)...");
-
     try {
-      // 2. تحميل الموديل المدمج داخل التطبيق
-      final modelPath = await ModelLoader().loadFromAssets('assets/models/vosk-model-ar.zip');
-      _model = await _vosk.createModel(modelPath);
+      final dir = await getApplicationDocumentsDirectory();
+      final extractPath = '${dir.path}/vosk-model-ar-mgb2-0.4';
 
+      if (!await Directory(extractPath).exists()) {
+        await _downloadAndExtractModel(dir.path, extractPath);
+      }
+
+      setState(() => _currentStatusText = "جاري تشغيل محرك الذكاء الاصطناعي...");
+
+      _model = await _vosk.createModel(extractPath);
       _recognizer = await _vosk.createRecognizer(
         model: _model!,
         sampleRate: 16000,
@@ -75,7 +78,8 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
       _speechService = await _vosk.initSpeechService(_recognizer!);
 
       setState(() {
-        _currentStatusText = "جاهز.. اضغط على المايك وابدأ رصد اللوحة";
+        _isReady = true;
+        _currentStatusText = "جاهز تماماً! اضغط على المايك لبدء الرصد";
       });
 
       _speechService!.onPartial().listen((event) {
@@ -98,7 +102,39 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
         }
       });
     } catch (e) {
-      setState(() => _currentStatusText = "خطأ في تهيئة الصوت: $e");
+      setState(() => _currentStatusText = "حدث خطأ: $e");
+    }
+  }
+
+  Future<void> _downloadAndExtractModel(String dirPath, String extractPath) async {
+    final zipPath = '$dirPath/model.zip';
+    final dio = Dio();
+
+    try {
+      await dio.download(
+        'https://alphacephei.com/vosk/models/vosk-model-ar-mgb2-0.4.zip',
+        zipPath,
+        onReceiveProgress: (rec, total) {
+          if (total != -1) {
+            final progress = ((rec / total) * 100).toStringAsFixed(0);
+            setState(() => _currentStatusText = "تحميل القاموس الصوتي (لمرة واحدة): $progress%");
+          }
+        },
+      );
+
+      setState(() => _currentStatusText = "جاري التثبيت... (قد يتجمد التطبيق لثوانٍ، لا تغلقه)");
+      await Future.delayed(const Duration(milliseconds: 500)); // إعطاء الواجهة وقتاً للتحديث
+
+      // فك الضغط الآمن بدون استهلاك الرامات
+      final inputStream = InputFileStream(zipPath);
+      final archive = ZipDecoder().decodeBuffer(inputStream);
+      extractArchiveToDisk(archive, dirPath);
+      inputStream.close();
+
+      await File(zipPath).delete();
+    } catch (e) {
+      setState(() => _currentStatusText = "خطأ في التحميل، تأكد من اتصال الإنترنت: $e");
+      rethrow;
     }
   }
 
@@ -107,43 +143,28 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
     String type = parsedData["type"];
 
     if (records.isNotEmpty && records.first["plate"] == plate) return;
-
     bool isWanted = await DatabaseHelper.instance.checkIsWanted(plate);
-
     Map<String, dynamic> newRow = {
-      "plate": plate,
-      "status": isWanted ? 1 : 0,
-      "type": type.isEmpty ? "-" : type,
-      "street": selectedStreet,
-      "district": selectedDistrict,
-      "note": selectedNote == "بدون ملاحظة" ? "-" : selectedNote,
+      "plate": plate, "status": isWanted ? 1 : 0, "type": type.isEmpty ? "-" : type,
+      "street": selectedStreet, "district": selectedDistrict, "note": selectedNote == "بدون ملاحظة" ? "-" : selectedNote,
     };
-
     int id = await DatabaseHelper.instance.insertLog(newRow);
     newRow["id"] = id;
-
     setState(() {
       records.insert(0, newRow);
       _liveSpokenText = "";
     });
-
     await _recognizer?.reset();
   }
 
   void _toggleListening() async {
-    if (_speechService == null) return;
+    if (!_isReady || _speechService == null) return;
     if (_isListening) {
       await _speechService!.stop();
-      setState(() {
-        _isListening = false;
-        _currentStatusText = "متوقف";
-      });
+      setState(() { _isListening = false; _currentStatusText = "متوقف"; });
     } else {
       await _speechService!.start();
-      setState(() {
-        _isListening = true;
-        _currentStatusText = "يستمع الآن...";
-      });
+      setState(() { _isListening = true; _currentStatusText = "يستمع الآن..."; });
     }
   }
 
@@ -151,31 +172,16 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
     var excel = ex.Excel.createExcel();
     ex.Sheet sheet = excel['الرصد الميداني'];
     excel.setDefaultSheet('الرصد الميداني');
-
-    sheet.appendRow([
-      ex.TextCellValue('اللوحة'),
-      ex.TextCellValue('الحالة'),
-      ex.TextCellValue('النوع'),
-      ex.TextCellValue('الشارع'),
-      ex.TextCellValue('ملاحظات'),
-    ]);
-
+    sheet.appendRow([ex.TextCellValue('اللوحة'), ex.TextCellValue('الحالة'), ex.TextCellValue('النوع'), ex.TextCellValue('الشارع'), ex.TextCellValue('ملاحظات')]);
     for (var r in records) {
-      sheet.appendRow([
-        ex.TextCellValue(r['plate'].toString()),
-        ex.TextCellValue(r['status'] == 1 ? 'مطلوبة' : 'سليمة'),
-        ex.TextCellValue((r['type'] ?? '-').toString()),
-        ex.TextCellValue((r['street'] ?? '-').toString()),
-        ex.TextCellValue((r['note'] ?? '-').toString()),
-      ]);
+      sheet.appendRow([ex.TextCellValue(r['plate'].toString()), ex.TextCellValue(r['status'] == 1 ? 'مطلوبة' : 'سليمة'), ex.TextCellValue((r['type'] ?? '-').toString()), ex.TextCellValue((r['street'] ?? '-').toString()), ex.TextCellValue((r['note'] ?? '-').toString())]);
     }
-
     final dir = await getApplicationDocumentsDirectory();
     final file = File('${dir.path}/rasd_${DateTime.now().millisecondsSinceEpoch}.xlsx');
     final bytes = excel.encode();
     if (bytes != null) {
       await file.writeAsBytes(bytes);
-      await Share.shareXFiles([XFile(file.path)], text: 'تقرير رصد السيارات المطلوبة');
+      await Share.shareXFiles([XFile(file.path)], text: 'تقرير الرصد');
     }
   }
 
@@ -192,35 +198,22 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
                 children: [
                   IconButton(
                     iconSize: 48,
-                    icon: Icon(
-                      _isListening ? Icons.mic : Icons.mic_none,
-                      color: _isListening ? Colors.redAccent : Colors.tealAccent,
-                    ),
+                    icon: Icon(_isListening ? Icons.mic : Icons.mic_none, color: _isListening ? Colors.redAccent : Colors.tealAccent),
                     onPressed: _toggleListening,
                   ),
                   const Spacer(),
-                  const Text(
-                    "SHEEKHA",
-                    style: TextStyle(color: Colors.tealAccent, fontSize: 20, fontWeight: FontWeight.bold),
-                  ),
+                  const Text("SHEEKHA", style: TextStyle(color: Colors.tealAccent, fontSize: 20, fontWeight: FontWeight.bold)),
                 ],
               ),
             ),
             Container(
-              margin: const EdgeInsets.symmetric(horizontal: 16),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1E293B),
-                borderRadius: BorderRadius.circular(12),
-              ),
+              margin: const EdgeInsets.symmetric(horizontal: 16), padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(color: const Color(0xFF1E293B), borderRadius: BorderRadius.circular(12)),
               child: Column(
                 children: [
-                  Text(_currentStatusText, style: const TextStyle(color: Colors.white70)),
+                  Text(_currentStatusText, style: const TextStyle(color: Colors.white70), textAlign: TextAlign.center),
                   if (_liveSpokenText.isNotEmpty)
-                    Text(
-                      _liveSpokenText,
-                      style: const TextStyle(color: Colors.greenAccent, fontSize: 18, fontWeight: FontWeight.bold),
-                    ),
+                    Text(_liveSpokenText, style: const TextStyle(color: Colors.greenAccent, fontSize: 18, fontWeight: FontWeight.bold)),
                 ],
               ),
             ),
@@ -228,27 +221,11 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
               padding: const EdgeInsets.all(16),
               child: Row(
                 children: [
-                  Expanded(
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E293B)),
-                      onPressed: () {},
-                      child: Text("الحي: $selectedDistrict", style: const TextStyle(fontSize: 12)),
-                    ),
-                  ),
+                  Expanded(child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E293B)), onPressed: () {}, child: Text("الحي: $selectedDistrict", style: const TextStyle(fontSize: 12)))),
                   const SizedBox(width: 8),
-                  Expanded(
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E293B)),
-                      onPressed: () {},
-                      child: Text("الشارع: $selectedStreet", style: const TextStyle(fontSize: 12)),
-                    ),
-                  ),
+                  Expanded(child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1E293B)), onPressed: () {}, child: Text("الشارع: $selectedStreet", style: const TextStyle(fontSize: 12)))),
                   const SizedBox(width: 8),
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.amber.shade800),
-                    onPressed: _showNotesDialog,
-                    child: const Text("ملاحظات", style: TextStyle(fontSize: 12)),
-                  ),
+                  ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.amber.shade800), onPressed: () {}, child: const Text("ملاحظات", style: TextStyle(fontSize: 12))),
                 ],
               ),
             ),
@@ -256,31 +233,13 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Row(
                 children: [
-                  ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.blueGrey),
-                    onPressed: _exportExcel,
-                    icon: const Icon(Icons.share, size: 16),
-                    label: const Text("تصدير إكسل"),
-                  ),
+                  ElevatedButton.icon(style: ElevatedButton.styleFrom(backgroundColor: Colors.blueGrey), onPressed: _exportExcel, icon: const Icon(Icons.share, size: 16), label: const Text("تصدير إكسل")),
                   const Spacer(),
-                  Text("عدد السجلات: ${records.length}", style: const TextStyle(color: Colors.white)),
+                  Text("العدد: ${records.length}", style: const TextStyle(color: Colors.white)),
                 ],
               ),
             ),
             const Divider(color: Colors.white24),
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Row(
-                children: [
-                  Expanded(flex: 3, child: Text("اللوحة", style: TextStyle(color: Colors.white60))),
-                  Expanded(flex: 1, child: Text("الحالة", style: TextStyle(color: Colors.white60))),
-                  Expanded(flex: 2, child: Text("النوع", style: TextStyle(color: Colors.white60))),
-                  Expanded(flex: 2, child: Text("الشارع", style: TextStyle(color: Colors.white60))),
-                  Expanded(flex: 2, child: Text("ملاحظات", style: TextStyle(color: Colors.white60))),
-                  SizedBox(width: 32),
-                ],
-              ),
-            ),
             Expanded(
               child: ListView.builder(
                 itemCount: records.length,
@@ -291,31 +250,10 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
                     color: index % 2 == 0 ? Colors.transparent : Colors.black12,
                     child: Row(
                       children: [
-                        Expanded(
-                          flex: 3,
-                          child: Text(
-                            row["plate"].toString(),
-                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                          ),
-                        ),
-                        Expanded(
-                          flex: 1,
-                          child: Icon(
-                            row["status"] == 1 ? Icons.check_circle : Icons.remove_circle_outline,
-                            color: row["status"] == 1 ? Colors.greenAccent : Colors.white30,
-                            size: 20,
-                          ),
-                        ),
+                        Expanded(flex: 3, child: Text(row["plate"].toString(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
+                        Expanded(flex: 1, child: Icon(row["status"] == 1 ? Icons.check_circle : Icons.remove_circle_outline, color: row["status"] == 1 ? Colors.greenAccent : Colors.white30, size: 20)),
                         Expanded(flex: 2, child: Text((row["type"] ?? "-").toString(), style: const TextStyle(color: Colors.white70))),
-                        Expanded(flex: 2, child: Text((row["street"] ?? "-").toString(), style: const TextStyle(color: Colors.white70))),
-                        Expanded(flex: 2, child: Text((row["note"] ?? "-").toString(), style: const TextStyle(color: Colors.white70))),
-                        IconButton(
-                          icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
-                          onPressed: () async {
-                            await DatabaseHelper.instance.deleteLog(row["id"]);
-                            setState(() => records.removeAt(index));
-                          },
-                        )
+                        IconButton(icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20), onPressed: () async { await DatabaseHelper.instance.deleteLog(row["id"]); setState(() => records.removeAt(index)); })
                       ],
                     ),
                   );
@@ -325,31 +263,6 @@ class _LicensePlateScannerScreenState extends State<LicensePlateScannerScreen> {
           ],
         ),
       ),
-    );
-  }
-
-  void _showNotesDialog() {
-    showDialog(
-      context: context,
-      builder: (context) {
-        return SimpleDialog(
-          title: const Text("اختر ملاحظة", textAlign: TextAlign.right),
-          children: [
-            "بدون ملاحظة",
-            "برحة يمين",
-            "برحة يسار",
-            "برحة نهاية الشارع",
-            "برحة وسط الشارع",
-            "برحة فندق"
-          ].map((note) => SimpleDialogOption(
-                onPressed: () {
-                  setState(() => selectedNote = note);
-                  Navigator.pop(context);
-                },
-                child: Text(note, textAlign: TextAlign.right),
-              )).toList(),
-        );
-      },
     );
   }
 }
